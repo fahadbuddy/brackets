@@ -27,11 +27,16 @@
 /**
  * PreferenceStorage defines an interface for persisting preference data as
  * name/value pairs for a module or plugin.
+ * 
+ * @deprecated Use PreferencesManager APIs instead.
  */
 define(function (require, exports, module) {
-    'use strict';
+    "use strict";
     
-    var PreferencesManager = require("preferences/PreferencesManager");
+    var _ = require("thirdparty/lodash");
+    
+    var PreferencesManager = require("preferences/PreferencesManager"),
+        DeprecationWarning = require("utils/DeprecationWarning");
     
     /**
      * @private
@@ -54,10 +59,12 @@ define(function (require, exports, module) {
             if (!error && (temp[key] !== undefined)) {
                 return true;
             } else {
-                throw new Error("Value '" + value + "' for key '" + key + "' must be a valid JSON value");
+                console.error("Value '" + value + "' for key '" + key + "' must be a valid JSON value");
+                return false;
             }
         } else {
-            throw new Error("Preference key '" + key + "' must be a string");
+            console.error("Preference key '" + key + "' must be a string");
+            return false;
         }
     }
     
@@ -93,6 +100,7 @@ define(function (require, exports, module) {
      * @param {!string} key A unique identifier
      */
     PreferenceStorage.prototype.remove = function (key) {
+        DeprecationWarning.deprecationWarning("remove is called to remove a preference '" + key + ",' use PreferencesManager.set (with value of undefined) instead.");
         // remove value from JSON storage
         delete this._json[key];
         _commit();
@@ -104,6 +112,7 @@ define(function (require, exports, module) {
      * @param {object} value A valid JSON value
      */
     PreferenceStorage.prototype.setValue = function (key, value) {
+        DeprecationWarning.deprecationWarning("setValue is called to set preference '" + key + ",' use PreferencesManager.set instead.");
         if (_validateJSONPair(key, value)) {
             this._json[key] = value;
             _commit();
@@ -116,6 +125,7 @@ define(function (require, exports, module) {
      * @return {object} Returns the value for the key or undefined.
      */
     PreferenceStorage.prototype.getValue = function (key) {
+        DeprecationWarning.deprecationWarning("getValue is called to get preference '" + key + ",' use PreferencesManager.get instead.");
         return this._json[key];
     };
     
@@ -130,7 +140,7 @@ define(function (require, exports, module) {
     
     /**
      * Writes name-value pairs from a JSON object as preference properties.
-     * Invalid JSON values throw an error and all changes are discarded.
+     * Invalid JSON values report an error and all changes are discarded.
      *
      * @param {!object} obj A JSON object with zero or more preference properties to write.
      * @param {boolean} append Defaults to false. When true, properties in the JSON object
@@ -138,38 +148,127 @@ define(function (require, exports, module) {
      *  all existing preferences are deleted before writing new properties from the JSON object.
      */
     PreferenceStorage.prototype.setAllValues = function (obj, append) {
+        DeprecationWarning.deprecationWarning("setAllValues is called to set preferences '" + Object.keys(obj) + ",' use PreferencesManager.set (probably with doNotSave flag) instead.");
+
         var self = this,
             error = null;
         
         // validate all name/value pairs before committing
-        $.each(obj, function (key, value) {
+        _.some(obj, function (value, key) {
             try {
                 _validateJSONPair(key, value);
             } catch (err) {
                 // fail fast
                 error = err;
-                return false;
+                return true;
             }
         });
         
         // skip changes if any error is detected
         if (error) {
-            throw error;
+            console.error(error);
+            return;
         }
         
         // delete all exiting properties if not appending
         if (!append) {
-            $.each(this._json, function (key, value) {
+            _.forEach(this._json, function (value, key) {
                 delete self._json[key];
             });
         }
         
         // copy properties from incoming JSON object
-        $.each(obj, function (key, value) {
+        _.forEach(obj, function (value, key) {
             self._json[key] = value;
         });
         
         _commit();
+    };
+    
+    /**
+     * Converts preferences to the new-style file-based preferences according to the
+     * rules. (See PreferencesManager.ConvertPreferences for information about the rules).
+     * 
+     * @param {Object} rules Conversion rules.
+     * @param {Array.<string>} convertedKeys List of keys that were previously converted 
+     *                                      (will not be reconverted)
+     * @param {boolean=} isViewState If it is undefined or false, then the preferences
+     *      listed in 'rules' are those normal user-editable preferences. Otherwise,
+     *      they are view state settings.
+     * @param {function(string)=} prefCheckCallback Optional callback function that
+     *      examines each preference key for migration.
+     * @return {Promise} promise that is resolved once the conversion is done. Callbacks are given a
+     *                      `complete` flag that denotes whether everything from this object 
+     *                      was converted (making it safe to delete entirely).
+     */
+    PreferenceStorage.prototype.convert = function (rules, convertedKeys, isViewState, prefCheckCallback) {
+        var prefs = this._json,
+            self = this,
+            complete = true,
+            manager  = isViewState ? PreferencesManager.stateManager : PreferencesManager,
+            deferred = new $.Deferred();
+        
+        if (!convertedKeys) {
+            convertedKeys = [];
+        }
+        
+        Object.keys(prefs).forEach(function (key) {
+            if (convertedKeys.indexOf(key) > -1) {
+                return;
+            }
+            
+            var rule = rules[key];
+            if (!rule && prefCheckCallback) {
+                rule = prefCheckCallback(key);
+            } else if (prefCheckCallback) {
+                // Check whether we have a new preference key-value pair
+                // for an old preference.
+                var newRule = prefCheckCallback(key, prefs[key]);
+                if (newRule) {
+                    rule = _.cloneDeep(newRule);
+                }
+            }
+            if (!rule) {
+                console.warn("Preferences conversion for ", self._clientID, " has no rule for", key);
+                complete = false;
+            } else if (_.isString(rule)) {
+                var parts = rule.split(" ");
+                if (parts[0] === "user") {
+                    var newKey = parts.length > 1 ? parts[1] : key;
+                    var options = null;
+                    
+                    if (parts.length > 2 && parts[2].indexOf("/") !== -1) {
+                        var projectPath = rule.substr(rule.indexOf(parts[2]));
+                        options = { location: { scope: "user",
+                                                layer: "project",
+                                                layerID: projectPath } };
+                    }
+                    
+                    manager.set(newKey, prefs[key], options);
+                    convertedKeys.push(key);
+                }
+            } else if (_.isObject(rule)) {
+                Object.keys(rule).forEach(function (ruleKey) {
+                    manager.set(ruleKey, rule[ruleKey]);
+                });
+                convertedKeys.push(key);
+            } else {
+                complete = false;
+            }
+        });
+        
+        if (convertedKeys.length > 0) {
+            manager.save().done(function () {
+                _commit();
+                deferred.resolve(complete, convertedKeys);
+            }).fail(function (error) {
+                deferred.reject(error);
+            });
+        } else {
+            deferred.resolve(complete, convertedKeys);
+        }
+        
+        return deferred.promise();
     };
     
     exports.PreferenceStorage = PreferenceStorage;

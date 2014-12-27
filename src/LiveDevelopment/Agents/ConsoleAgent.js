@@ -30,7 +30,7 @@
  * local console.
  */
 define(function ConsoleAgent(require, exports, module) {
-    'use strict';
+    "use strict";
 
     var Inspector = require("LiveDevelopment/Inspector/Inspector");
 
@@ -45,6 +45,9 @@ define(function ConsoleAgent(require, exports, module) {
             level = "warn";
         }
         var text = "ConsoleAgent: " + message.text;
+        if (message.url) {
+            text += " (url: " + message.url + ")";
+        }
         if (message.stackTrace) {
             var callFrame = message.stackTrace[0];
             text += " in " + callFrame.functionName + ":" + callFrame.columnNumber;
@@ -53,14 +56,14 @@ define(function ConsoleAgent(require, exports, module) {
     }
 
     // WebInspector Event: Console.messageAdded
-    function _onMessageAdded(res) {
+    function _onMessageAdded(event, res) {
         // res = {message}
         _lastMessage = res.message;
         _log(_lastMessage);
     }
 
     // WebInspector Event: Console.messageRepeatCountUpdated
-    function _onMessageRepeatCountUpdated(res) {
+    function _onMessageRepeatCountUpdated(event, res) {
         // res = {count}
         if (_lastMessage) {
             _log(_lastMessage);
@@ -68,26 +71,33 @@ define(function ConsoleAgent(require, exports, module) {
     }
 
     // WebInspector Event: Console.messagesCleared
-    function _onMessagesCleared(res) {
+    function _onMessagesCleared(event, res) {
         // res = {}
+    }
+    
+    /**
+     * Enable the inspector Console domain
+     * @return {jQuery.Promise} A promise resolved when the Console.enable() command is successful.
+     */
+    function enable() {
+        return Inspector.Console.enable();
     }
 
     /** Initialize the agent */
     function load() {
-        Inspector.Console.enable();
-        Inspector.on("Console.messageAdded", _onMessageAdded);
-        Inspector.on("Console.messageRepeatCountUpdated", _onMessageRepeatCountUpdated);
-        Inspector.on("Console.messagesCleared", _onMessagesCleared);
+        Inspector.Console
+            .on("messageAdded.ConsoleAgent", _onMessageAdded)
+            .on("messageRepeatCountUpdated.ConsoleAgent", _onMessageRepeatCountUpdated)
+            .on("messagesCleared.ConsoleAgent", _onMessagesCleared);
     }
 
     /** Clean up */
     function unload() {
-        Inspector.off("Console.messageAdded", _onMessageAdded);
-        Inspector.off("Console.messageRepeatCountUpdated", _onMessageRepeatCountUpdated);
-        Inspector.off("Console.messagesCleared", _onMessagesCleared);
+        Inspector.Console.off(".ConsoleAgent");
     }
 
     // Export public functions
+    exports.enable = enable;
     exports.load = load;
     exports.unload = unload;
 });

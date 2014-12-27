@@ -30,7 +30,7 @@
  * interfaces with the remote debugger.
  */
 define(function ScriptAgent(require, exports, module) {
-    'use strict';
+    "use strict";
 
     var Inspector = require("LiveDevelopment/Inspector/Inspector");
     var DOMAgent = require("LiveDevelopment/Agents/DOMAgent");
@@ -40,15 +40,7 @@ define(function ScriptAgent(require, exports, module) {
     var _idToScript; // id -> script info
     var _insertTrace; // the last recorded trace of a DOM insertion
 
-    /** Add a call stack trace to a node
-     * @param {integer} node id
-     * @param [{Debugger.CallFrame}] call stack
-     */
-    function _addTraceToNode(nodeId, trace) {
-        var node = DOMAgent.nodeWithId(nodeId);
-        node.trace = trace;
-    }
-
+    // TODO: should the parameter to this be an ID rather than a URL?
     /** Get the script information for a given url
      * @param {string} url
      */
@@ -56,6 +48,7 @@ define(function ScriptAgent(require, exports, module) {
         return _idToScript[url];
     }
 
+    // TODO: Strip off query/hash strings from URL (see CSSAgent._canonicalize())
     /** Get the script information for a given url
      * @param {string} url
      */
@@ -64,13 +57,13 @@ define(function ScriptAgent(require, exports, module) {
     }
 
     // DOMAgent Event: Document root loaded
-    function _onGetDocument(res) {
+    function _onGetDocument(event, res) {
         Inspector.DOMDebugger.setDOMBreakpoint(res.root.nodeId, "subtree-modified");
         _load.resolve();
     }
 
     // WebInspector Event: DOM.childNodeInserted
-    function _onChildNodeInserted(res) {
+    function _onChildNodeInserted(event, res) {
         // res = {parentNodeId, previousNodeId, node}
         if (_insertTrace) {
             var node = DOMAgent.nodeWithId(res.node.nodeId);
@@ -79,20 +72,21 @@ define(function ScriptAgent(require, exports, module) {
         }
     }
 
+    // TODO: Strip off query/hash strings from URL (see CSSAgent._canonicalize())
     // WebInspector Event: Debugger.scriptParsed
-    function _onScriptParsed(res) {
+    function _onScriptParsed(event, res) {
         // res = {scriptId, url, startLine, startColumn, endLine, endColumn, isContentScript, sourceMapURL}
         _idToScript[res.scriptId] = res;
         _urlToScript[res.url] = res;
     }
 
     // WebInspector Event: Debugger.scriptFailedToParse
-    function _onScriptFailedToParse(res) {
+    function _onScriptFailedToParse(event, res) {
         // res = {url, scriptSource, startLine, errorLine, errorMessage}
     }
 
     // WebInspector Event: Debugger.paused
-    function _onPaused(res) {
+    function _onPaused(event, res) {
         // res = {callFrames, reason, data}
         switch (res.reason) {
 
@@ -114,28 +108,55 @@ define(function ScriptAgent(require, exports, module) {
 
     }
 
-    /** Initialize the agent */
-    function load() {
+    function _reset() {
         _urlToScript = {};
         _idToScript = {};
+    }
+
+    /**
+     * @private
+     * WebInspector Event: Page.frameNavigated
+     * @param {jQuery.Event} event
+     * @param {frame: Frame} res
+     */
+    function _onFrameNavigated(event, res) {
+        // Clear maps when navigating to a new page, but not if an iframe was loaded
+        if (!res.frame.parentId) {
+            _reset();
+        }
+    }
+
+    /** Initialize the agent */
+    function load() {
+        _reset();
         _load = new $.Deferred();
-        Inspector.Debugger.enable();
-        Inspector.Debugger.setPauseOnExceptions("uncaught");
-        Inspector.on("DOMAgent.getDocument", _onGetDocument);
-        Inspector.on("Debugger.scriptParsed", _onScriptParsed);
-        Inspector.on("Debugger.scriptFailedToParse", _onScriptFailedToParse);
-        Inspector.on("Debugger.paused", _onPaused);
-        Inspector.on("DOM.childNodeInserted", _onChildNodeInserted);
-        return _load;
+
+        var enableResult = new $.Deferred();
+
+        Inspector.Debugger.enable().done(function () {
+            Inspector.Debugger.setPauseOnExceptions("uncaught").done(function () {
+                enableResult.resolve();
+            });
+        });
+
+        Inspector.Page.on("frameNavigated.ScriptAgent", _onFrameNavigated);
+        DOMAgent.on("getDocument.ScriptAgent", _onGetDocument);
+        Inspector.Debugger
+            .on("scriptParsed.ScriptAgent", _onScriptParsed)
+            .on("scriptFailedToParse.ScriptAgent", _onScriptFailedToParse)
+            .on("paused.ScriptAgent", _onPaused);
+        Inspector.DOM.on("childNodeInserted.ScriptAgent", _onChildNodeInserted);
+
+        return $.when(_load.promise(), enableResult.promise());
     }
 
     /** Clean up */
     function unload() {
-        Inspector.off("DOMAgent.getDocument", _onGetDocument);
-        Inspector.off("Debugger.scriptParsed", _onScriptParsed);
-        Inspector.off("Debugger.scriptFailedToParse", _onScriptFailedToParse);
-        Inspector.off("Debugger.paused", _onPaused);
-        Inspector.off("DOM.childNodeInserted", _onChildNodeInserted);
+        _reset();
+        Inspector.Page.off(".ScriptAgent");
+        DOMAgent.off(".ScriptAgent");
+        Inspector.Debugger.off(".ScriptAgent");
+        Inspector.DOM.off(".ScriptAgent");
     }
 
     // Export public functions

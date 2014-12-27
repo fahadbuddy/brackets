@@ -22,7 +22,7 @@
  */
 
 /*jslint vars: true, plusplus: true, devel: true, browser: true, nomen: true, indent: 4, maxerr: 50 */
-/*global define, describe, beforeEach, afterEach, it, runs, waitsFor, expect, brackets */
+/*global define, describe, beforeEach, afterEach, it, runs, waitsForDone */
 
 // TODO: Eventually we should have a brackets performance test suite that is separate from the unit tests
 
@@ -34,40 +34,35 @@ define(function (require, exports, module) {
         Commands,                   // loaded from brackets.test
         DocumentCommandHandlers,    // loaded from brackets.test
         PerfUtils,                  // loaded from brackets.test
-        JSLintUtils,                // loaded from brackets.test
         DocumentManager,            // loaded from brackets.test
         SpecRunnerUtils             = require("spec/SpecRunnerUtils"),
-        PerformanceReporter         = require("perf/PerformanceReporter");
+        UnitTestReporter            = require("test/UnitTestReporter");
 
-    var jsLintPrevSetting;
+    var jsLintCommand, jsLintPrevSetting;
 
     describe("Performance Tests", function () {
         
-        this.performance = true;
+        this.category = "performance";
         
         // Note: this tests assumes that the "brackets-scenario" repo is in the same folder
         //       as the "brackets-app"
         //
         // TODO: these tests rely on real world example files that cannot be on open source. 
         // We should replace these with test files that can be in the public repro.
-        var testPath = SpecRunnerUtils.getTestPath("/../../../brackets-scenario/OpenFileTest/"),
+        var testPath = SpecRunnerUtils.getTestPath("/perf/OpenFile-perf-files/"),
             testWindow;
         
         function openFile(path) {
-            var didOpen = false, gotError = false;
-        
+            var fullPath = testPath + path;
             runs(function () {
-                CommandManager.execute(Commands.FILE_OPEN, {fullPath: testPath + path})
-                    .done(function () {
-                        didOpen = true;
-                    })
-                    .fail(function () { gotError = true; });
+                var promise = CommandManager.execute(Commands.FILE_OPEN, {fullPath: fullPath});
+                waitsForDone(promise);
             });
-            waitsFor(function () { return didOpen && !gotError; }, 1000);
             
             runs(function () {
-                PerformanceReporter.logTestWindow(PerfUtils.OPEN_FILE, path);
-                PerformanceReporter.clearTestWindow();
+                var reporter = UnitTestReporter.getActiveReporter();
+                reporter.logTestWindow(/Open File:\t,*/, path);
+                reporter.clearTestWindow();
             });
         }
         
@@ -81,14 +76,24 @@ define(function (require, exports, module) {
                 DocumentCommandHandlers = testWindow.brackets.test.DocumentCommandHandlers;
                 DocumentManager     = testWindow.brackets.test.DocumentManager;
                 PerfUtils           = testWindow.brackets.test.PerfUtils;
-                JSLintUtils         = testWindow.brackets.test.JSLintUtils;
         
-                jsLintPrevSetting = JSLintUtils.getEnabled();
-                JSLintUtils.setEnabled(false);
+                jsLintCommand = CommandManager.get("jslint.toggleEnabled");
+                if (jsLintCommand) {
+                    jsLintPrevSetting = jsLintCommand.getChecked();
+                    if (jsLintPrevSetting) {
+                        jsLintCommand.execute();
+                    }
+                }
             });
         });
         
         afterEach(function () {
+            testWindow              = null;
+            CommandManager          = null;
+            Commands                = null;
+            DocumentCommandHandlers = null;
+            DocumentManager         = null;
+            PerfUtils               = null;
             SpecRunnerUtils.closeTestWindow();
         });
         
@@ -97,11 +102,11 @@ define(function (require, exports, module) {
         // tied to a window, so we need one window for all the tests. Need to think
         // more about how performance tests should ultimately work.
         it("File open performance", function () {
-            openFile("all-classes.js");
+            openFile("brackets-concat.js"); // 3.4MB
             openFile("jquery_ui_index.html");
             openFile("blank.js");
-            openFile("example-data.js");
-            openFile("sink.css");
+            openFile("InlineWidget.js");
+            openFile("quiet-scrollbars.css");
             openFile("England(Chinese).htm");
             openFile("jquery.mobile-1.1.0.css");
             openFile("jquery.mobile-1.1.0.min.css");

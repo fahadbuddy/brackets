@@ -28,23 +28,28 @@
 /**
  * HighlightAgent dispatches events for highlight requests from in-browser
  * highlight requests, and allows highlighting nodes and rules in the browser.
+ *
+ * Trigger "highlight" when a node should be highlighted
  */
 define(function HighlightAgent(require, exports, module) {
-    'use strict';
+    "use strict";
 
-    var Inspector = require("LiveDevelopment/Inspector/Inspector");
-    var RemoteAgent = require("LiveDevelopment/Agents/RemoteAgent");
-    var DOMAgent = require("LiveDevelopment/Agents/DOMAgent");
+    var DOMAgent        = require("LiveDevelopment/Agents/DOMAgent"),
+        EventDispatcher = require("utils/EventDispatcher"),
+        Inspector       = require("LiveDevelopment/Inspector/Inspector"),
+        LiveDevelopment = require("LiveDevelopment/LiveDevelopment"),
+        RemoteAgent     = require("LiveDevelopment/Agents/RemoteAgent"),
+        _               = require("thirdparty/lodash");
 
-    var _highlight; // active highlight
+    var _highlight = {}; // active highlight
 
     // Remote Event: Highlight
-    function _onRemoteHighlight(res) {
+    function _onRemoteHighlight(event, res) {
         var node;
         if (res.value === "1") {
             node = DOMAgent.nodeWithId(res.nodeId);
         }
-        Inspector.trigger("HighlightAgent.highlight", node);
+        exports.trigger("highlight", node);
     }
 
     /** Hide in-browser highlighting */
@@ -64,6 +69,10 @@ define(function HighlightAgent(require, exports, module) {
      * @param {DOMNode} node
      */
     function node(n) {
+        if (!LiveDevelopment.config.experimental) {
+            return;
+        }
+        
         if (!Inspector.config.highlight) {
             return;
         }
@@ -92,29 +101,63 @@ define(function HighlightAgent(require, exports, module) {
      * @param {string} rule selector
      */
     function rule(name) {
-        if (_highlight.rule === name) {
+        if (_highlight.ref === name) {
             return;
         }
         hide();
         _highlight = {type: "css", ref: name};
         RemoteAgent.call("highlightRule", name);
     }
+    
+    /** Highlight all nodes with 'data-brackets-id' value
+     * that matches id, or if id is an array, matches any of the given ids.
+     * @param {string|Array<string>} value of the 'data-brackets-id' to match,
+     * or an array of such.
+     */
+    function domElement(ids) {
+        var selector = "";
+        if (!Array.isArray(ids)) {
+            ids = [ids];
+        }
+        _.each(ids, function (id) {
+            if (selector !== "") {
+                selector += ",";
+            }
+            selector += "[data-brackets-id='" + id + "']";
+        });
+        rule(selector);
+    }
+    
+    /**
+     * Redraw active highlights
+     */
+    function redraw() {
+        RemoteAgent.call("redrawHighlights");
+    }
 
     /** Initialize the agent */
     function load() {
-        _highlight = {};
-        Inspector.on("RemoteAgent.highlight", _onRemoteHighlight);
+        if (LiveDevelopment.config.experimental) {
+            RemoteAgent.on("highlight.HighlightAgent", _onRemoteHighlight);
+        }
     }
 
     /** Clean up */
     function unload() {
-        Inspector.off("RemoteAgent.highlight", _onRemoteHighlight);
+        if (LiveDevelopment.config.experimental) {
+            RemoteAgent.off(".HighlightAgent");
+        }
     }
+    
+    
+    EventDispatcher.makeEventDispatcher(exports);
 
     // Export public functions
     exports.hide = hide;
     exports.node = node;
     exports.rule = rule;
+    exports.domElement = domElement;
+    exports.redraw = redraw;
     exports.load = load;
     exports.unload = unload;
 });
